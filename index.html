@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>雲端電子號碼牌系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #f3f4f6;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .view-hidden {
+            display: none !important;
+        }
+        
+        /* 票券切角設計 */
+        .ticket-divider { position: relative; }
+        .ticket-divider::before, .ticket-divider::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            width: 24px;
+            height: 24px;
+            background-color: #f3f4f6;
+            border-radius: 50%;
+            transform: translateY(-50%);
+            box-shadow: inset 0 0 4px rgba(0,0,0,0.1);
+        }
+        .ticket-divider::before { left: -12px; }
+        .ticket-divider::after { right: -12px; }
+
+        /* 已兌換印章 */
+        .stamp {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-15deg) scale(0);
+            border: 4px solid #ef4444;
+            color: #ef4444;
+            font-size: 2rem;
+            font-weight: 900;
+            padding: 0.5rem 2rem;
+            border-radius: 0.5rem;
+            opacity: 0;
+            transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            pointer-events: none;
+            z-index: 10;
+        }
+        .stamp.show {
+            transform: translate(-50%, -50%) rotate(-15deg) scale(1);
+            opacity: 0.8;
+        }
+
+        /* 漸變背景 */
+        .bg-gradient-animate {
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            background-size: 200% 200%;
+            animation: gradientMove 5s ease infinite;
+        }
+        @keyframes gradientMove {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4 relative">
+
+    <div id="loading-view" class="w-full max-w-sm flex flex-col items-center justify-center space-y-4">
+        <div class="w-12 h-12 border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin"></div>
+        <p class="text-gray-500 font-medium tracking-wide">系統連線中...</p>
+    </div>
+
+    <div id="invalid-view" class="w-full max-w-sm bg-white rounded-2xl shadow-xl overflow-hidden view-hidden p-8 text-center">
+        <div class="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+        </div>
+        <h2 class="text-2xl font-bold text-gray-800 mb-2">無效的連結</h2>
+        <p class="text-gray-500 text-sm leading-relaxed mb-4">此網址為一次性且無法轉傳共用。<br>請親自至現場掃描 QR Code 取號。</p>
+    </div>
+
+    <div id="store-view" class="w-full max-w-sm bg-gray-900 rounded-3xl shadow-2xl overflow-hidden view-hidden border border-gray-800">
+        <div class="p-6 bg-gray-800 text-center border-b border-gray-700">
+            <h2 class="text-xl font-bold text-white tracking-widest">發號主控台</h2>
+            <p id="store-date-display" class="text-sm text-gray-400 mt-1">發放日期：載入中</p>
+        </div>
+        
+        <div class="p-8 flex flex-col items-center">
+            <div class="bg-white p-3 rounded-2xl shadow-inner mb-6">
+                <!-- QR Code 容器 -->
+                <div id="qrcode" class="w-56 h-56 flex items-center justify-center bg-gray-50 rounded-xl"></div>
+            </div>
+            <p class="text-gray-400 text-sm font-medium mb-6">請引導顧客掃描上方 QR Code 取號</p>
+            
+            <div class="w-full grid grid-cols-2 gap-4 mb-8">
+                <div class="bg-gray-800 rounded-2xl p-4 text-center border border-gray-700">
+                    <p class="text-xs text-gray-400 mb-1">今日已發放</p>
+                    <p id="store-issued-count" class="text-3xl font-black text-blue-400">0</p>
+                </div>
+                <div class="bg-gray-800 rounded-2xl p-4 text-center border border-gray-700">
+                    <p class="text-xs text-gray-400 mb-1">已完成兌換</p>
+                    <p id="store-redeemed-count" class="text-3xl font-black text-green-400">0</p>
+                </div>
+            </div>
+
+            <button onclick="openModal('reset-modal')" class="w-full py-3 rounded-xl font-bold text-red-400 bg-red-400/10 border border-red-400/30 hover:bg-red-400/20 active:scale-95 transition-all flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                強制清除今日資料歸零
+            </button>
+        </div>
+    </div>
+
+    <main id="customer-view" class="w-full max-w-sm bg-white rounded-2xl shadow-xl overflow-hidden relative view-hidden">
+        
+        <!-- 取號中提示 -->
+        <div id="ticket-loading" class="absolute inset-0 bg-white z-20 flex flex-col items-center justify-center">
+            <div class="w-10 h-10 border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin mb-4"></div>
+            <p class="text-gray-500 font-bold">為您抽取號碼中...</p>
+        </div>
+
+        <div class="bg-gradient-animate text-white text-center py-6 px-4">
+            <h1 class="text-xl font-bold tracking-wider">限時快閃活動</h1>
+            <p class="text-sm opacity-90 mt-1">憑此畫面至櫃台兌換專屬好禮</p>
+        </div>
+
+        <div class="p-8 text-center relative overflow-hidden" id="ticket-content">
+            <div id="redeemed-stamp" class="stamp">已兌換</div>
+            <p class="text-gray-500 text-sm font-medium mb-2">您的專屬號碼</p>
+            <div class="flex items-center justify-center mb-6">
+                <span class="text-2xl font-bold text-gray-400 mr-2">No.</span>
+                <span id="ticket-number" class="text-6xl font-black text-gray-800 tracking-tighter">---</span>
+            </div>
+            
+            <div class="flex flex-col space-y-2 bg-gray-50 py-3 px-4 rounded-xl border border-gray-100">
+                <div class="flex items-center justify-between w-full">
+                    <span class="text-xs text-gray-400">取得日期</span>
+                    <span id="ticket-date" class="text-sm font-bold text-gray-700">--/--/--</span>
+                </div>
+                <div class="flex items-center w-full justify-between">
+                    <span class="text-xs text-gray-400">取得時間</span>
+                    <span id="ticket-time" class="text-sm font-bold text-gray-700">--:--</span>
+                </div>
+            </div>
+
+            <!-- 防偽動態時鐘 -->
+            <div class="mt-4 w-full text-center bg-blue-50 py-2 rounded-xl border border-blue-100 flex items-center justify-center space-x-2">
+                <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                <span class="text-xs text-blue-500 font-bold">即時防偽驗證</span>
+                <span id="live-clock" class="text-sm font-mono font-bold text-blue-700 tracking-wider">--:--:--</span>
+            </div>
+        </div>
+
+        <div class="ticket-divider h-8 relative flex items-center">
+            <div class="w-full border-t-2 border-dashed border-gray-200 mx-4"></div>
+        </div>
+
+        <div class="p-6 pt-2 pb-8">
+            <button id="btn-redeem" class="w-full py-4 rounded-xl font-bold text-lg text-white bg-gray-300 shadow-lg transition-all transform flex justify-center items-center pointer-events-none">
+                <span id="btn-redeem-text">讀取中...</span>
+            </button>
+            <p class="text-xs text-center text-red-400 mt-4 font-medium">⚠️ 提醒：請務必交由工作人員點擊兌換</p>
+        </div>
+    </main>
+
+    <!-- 顧客兌換確認 Modal -->
+    <div id="confirm-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 pointer-events-none transition-all duration-300">
+        <div class="bg-white rounded-2xl w-full max-w-xs p-6 text-center transform scale-95 transition-transform duration-300" id="confirm-modal-content">
+            <div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            </div>
+            <h3 class="text-xl font-bold text-gray-800 mb-2">確認兌換？</h3>
+            <p class="text-gray-500 text-sm mb-6">點擊後將無法還原，請確認是否由工作人員操作。</p>
+            <div class="flex space-x-3">
+                <button onclick="closeModal('confirm-modal')" class="flex-1 py-3 rounded-xl font-bold text-gray-600 bg-gray-100 active:bg-gray-200 transition-colors">取消</button>
+                <button id="btn-execute-redeem" class="flex-1 py-3 rounded-xl font-bold text-white bg-blue-500 active:bg-blue-600 shadow-md transition-colors">確認兌換</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 店家歸零確認 Modal -->
+    <div id="reset-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 pointer-events-none transition-all duration-300">
+        <div class="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-xs p-6 text-center transform scale-95 transition-transform duration-300" id="reset-modal-content">
+            <div class="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+            </div>
+            <h3 class="text-xl font-bold text-white mb-2">警告：確認歸零？</h3>
+            <p class="text-gray-400 text-sm mb-6 leading-relaxed">這將會清除今日所有的號碼牌紀錄。<br>已經在等候的客人票券將會失效。</p>
+            <div class="flex space-x-3">
+                <button onclick="closeModal('reset-modal')" class="flex-1 py-3 rounded-xl font-bold text-gray-400 bg-gray-800 active:bg-gray-700 transition-colors">取消</button>
+                <button id="btn-execute-reset" class="flex-1 py-3 rounded-xl font-bold text-white bg-red-500 active:bg-red-600 shadow-md transition-colors">確認刪除</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 一般訊息提示 Modal -->
+    <div id="msg-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 opacity-0 pointer-events-none transition-all duration-300">
+        <div class="bg-white rounded-2xl w-full max-w-xs p-6 text-center transform scale-95 transition-transform duration-300" id="msg-modal-content">
+            <h3 id="msg-title" class="text-lg font-bold text-gray-800 mb-2">提示</h3>
+            <p id="msg-text" class="text-gray-500 text-sm mb-6">訊息內容</p>
+            <button onclick="closeModal('msg-modal')" class="w-full py-3 rounded-xl font-bold text-white bg-blue-500 active:bg-blue-600 transition-colors">我知道了</button>
+        </div>
+    </div>
+
+    <script type="module">
+        // 載入穩定版本 Firebase SDK
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, getDocs, deleteDoc, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+        // ==========================================
+        // 您專屬的 Firebase Config
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyAUlLgYZxGn1hvJtDM9QPnXiSeTGHCeJtk",
+            authDomain: "number-d4ecd.firebaseapp.com",
+            projectId: "number-d4ecd",
+            storageBucket: "number-d4ecd.firebasestorage.app",
+            messagingSenderId: "304123026188",
+            appId: "1:304123026188:web:0ae5e2d2d4939430820729"
+        };
+
+        // 系統全域變數
+        let app, auth, db;
+        
+        // 日期作為每日歸零依據 (YYYYMMDD)
+        const now = new Date();
+        const todayStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}`;
+        
+        // 客人手機憑證 (存在 LocalStorage，確保不會重複抽)
+        let localUserId = localStorage.getItem(`ticket_uid_${todayStr}`);
+        
+        // 綁定 UI 元素
+        const viewLoading = document.getElementById('loading-view');
+        const viewInvalid = document.getElementById('invalid-view');
+        const viewStore = document.getElementById('store-view');
+        const viewCustomer = document.getElementById('customer-view');
+
+        async function initSystem() {
+            try {
+                // 初始化 Firebase
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // 進行匿名登入 (必須至 Firebase 控制台開啟 Anonymous)
+                await signInAnonymously(auth);
+                
+                // 登入成功後，開始判斷路徑
+                routeView();
+                
+            } catch (error) {
+                console.error("Firebase Initialization Error:", error);
+                viewLoading.innerHTML = `
+                    <div class="text-center bg-white p-6 rounded-2xl shadow-xl w-11/12 max-w-sm">
+                        <div class="text-red-500 mb-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                        </div>
+                        <h3 class="font-bold text-lg text-gray-800 mb-2">系統連線失敗</h3>
+                        <p class="text-xs text-gray-500 mb-4 text-left bg-gray-50 p-2 rounded">請確認：<br>1. Firebase 已開啟匿名登入<br>2. Firestore Rules 已設為允許讀寫</p>
+                        <button onclick="window.location.reload()" class="w-full bg-blue-500 text-white font-bold py-2 rounded-lg">重新整理</button>
+                    </div>`;
+            }
+        }
+
+        function routeView() {
+            viewLoading.classList.add('view-hidden');
+            const urlParams = new URLSearchParams(window.location.search);
+            
+            // 1. 如果網址帶有 ?role=admin -> 顯示店家主控台
+            if (urlParams.get('role') === 'admin') {
+                initAdminMode();
+                return;
+            }
+
+            // 2. 如果網址帶有 ?action=scan -> 客人掃描 QR Code 新進來
+            if (urlParams.get('action') === 'scan') {
+                // 【核心防護】立刻把網址清空，讓客人無法複製有效網址傳給別人
+                window.history.replaceState(null, null, window.location.pathname);
+                initCustomerMode(true); // true = 允許抽取新號碼
+                return;
+            }
+
+            // 3. 網址乾淨無參數 -> 檢查手機內是否有今日憑證
+            if (localUserId) {
+                // 有憑證，代表是不小心重新整理，直接顯示他的票
+                initCustomerMode(false);
+            } else {
+                // 無憑證且無參數，代表是朋友點開分享的連結 -> 顯示無效畫面
+                viewInvalid.classList.remove('view-hidden');
+            }
+        }
+
+        function initAdminMode() {
+            viewStore.classList.remove('view-hidden');
+            document.getElementById('store-date-display').textContent = `發放日期：${now.getFullYear()}/${now.getMonth()+1}/${now.getDate()}`;
+
+            // 產生 QR Code (網址必須帶有 ?action=scan，讓系統知道這是正確掃描)
+            const qrUrl = window.location.origin + window.location.pathname + '?action=scan';
+            document.getElementById('qrcode').innerHTML = '';
+            new QRCode(document.getElementById('qrcode'), {
+                text: qrUrl,
+                width: 200, height: 200,
+                colorDark : "#000000", colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.L // 使用 L 容錯率讓方塊不會太密
+            });
+
+            // 監聽當日發放數據
+            const statsRef = doc(db, 'system_stats', `stats_${todayStr}`);
+            onSnapshot(statsRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    document.getElementById('store-issued-count').textContent = docSnap.data().issuedCount || 0;
+                    document.getElementById('store-redeemed-count').textContent = docSnap.data().redeemedCount || 0;
+                } else {
+                    document.getElementById('store-issued-count').textContent = '0';
+                    document.getElementById('store-redeemed-count').textContent = '0';
+                }
+            });
+
+            // 綁定歸零確認按鈕
+            document.getElementById('btn-execute-reset').addEventListener('click', async () => {
+                closeModal('reset-modal');
+                try {
+                    // 1. 刪除今日所有的票券
+                    const ticketsCol = collection(db, `tickets_${todayStr}`);
+                    const querySnapshot = await getDocs(ticketsCol);
+                    const deletePromises = [];
+                    querySnapshot.forEach((document) => {
+                        deletePromises.push(deleteDoc(document.ref));
+                    });
+                    await Promise.all(deletePromises);
+
+                    // 2. 重置統計數據
+                    await setDoc(statsRef, { issuedCount: 0, redeemedCount: 0 });
+                    showMsg('成功', '今日資料已清空，可重新發放！');
+                } catch (error) {
+                    console.error("Reset Error:", error);
+                    showMsg('錯誤', '歸零失敗，請確認網路狀態。');
+                }
+            });
+        }
+
+        async function initCustomerMode(allowDrawNew) {
+            viewCustomer.classList.remove('view-hidden');
+            
+            // 如果手機沒有憑證，產生一組並儲存
+            if (!localUserId) {
+                localUserId = crypto.randomUUID();
+                localStorage.setItem(`ticket_uid_${todayStr}`, localUserId);
+            }
+
+            const myTicketRef = doc(db, `tickets_${todayStr}`, localUserId);
+
+            // 如果允許抽號，執行高併發安全的 Transaction 發號
+            if (allowDrawNew) {
+                try {
+                    const statsRef = doc(db, 'system_stats', `stats_${todayStr}`);
+                    
+                    await runTransaction(db, async (transaction) => {
+                        // 檢查自己是否已經有票 (防重複掃)
+                        const existingTicket = await transaction.get(myTicketRef);
+                        if (existingTicket.exists()) return; 
+
+                        // 讀取目前的號碼
+                        const statsDoc = await transaction.get(statsRef);
+                        let newNumber = 1;
+                        if (statsDoc.exists()) {
+                            newNumber = (statsDoc.data().issuedCount || 0) + 1;
+                            transaction.update(statsRef, { issuedCount: newNumber });
+                        } else {
+                            transaction.set(statsRef, { issuedCount: 1, redeemedCount: 0 });
+                        }
+
+                        // 寫入我的專屬票券
+                        const nowTime = new Date();
+                        transaction.set(myTicketRef, {
+                            number: String(newNumber).padStart(3, '0'),
+                            date: `${nowTime.getFullYear()}/${String(nowTime.getMonth()+1).padStart(2,'0')}/${String(nowTime.getDate()).padStart(2,'0')}`,
+                            time: `${String(nowTime.getHours()).padStart(2,'0')}:${String(nowTime.getMinutes()).padStart(2,'0')}`,
+                            isRedeemed: false,
+                            timestamp: nowTime.getTime()
+                        });
+                    });
+                } catch (error) {
+                    console.error("Transaction failed: ", error);
+                    document.getElementById('ticket-loading').innerHTML = `<p class="text-red-500 font-bold mb-4">取號失敗，請重新掃描</p><button onclick="window.location.reload()" class="px-4 py-2 bg-blue-500 text-white rounded-lg">重試</button>`;
+                    return;
+                }
+            }
+
+            // 即時監聽我的票券狀態
+            onSnapshot(myTicketRef, (docSnap) => {
+                document.getElementById('ticket-loading').classList.add('hidden');
+                
+                if (docSnap.exists()) {
+                    renderTicketUI(docSnap.data());
+                } else {
+                    // 如果票券不存在 (代表店家按下了強制歸零)
+                    renderResetUI();
+                }
+            });
+
+            // 綁定兌換按鈕
+            document.getElementById('btn-redeem').addEventListener('click', () => {
+                openModal('confirm-modal');
+            });
+            
+            document.getElementById('btn-execute-redeem').addEventListener('click', async () => {
+                closeModal('confirm-modal');
+                try {
+                    // 更新票券為已兌換
+                    await setDoc(myTicketRef, { isRedeemed: true }, { merge: true });
+                    
+                    // 增加店家端的兌換統計
+                    const statsRef = doc(db, 'system_stats', `stats_${todayStr}`);
+                    await runTransaction(db, async (transaction) => {
+                        const statsDoc = await transaction.get(statsRef);
+                        if (statsDoc.exists()) {
+                            const currentRedeemed = statsDoc.data().redeemedCount || 0;
+                            transaction.update(statsRef, { redeemedCount: currentRedeemed + 1 });
+                        }
+                    });
+                } catch (error) {
+                    console.error("Redeem Error:", error);
+                    showMsg('錯誤', '兌換失敗，請確認網路狀態。');
+                }
+            });
+        }
+
+        function renderTicketUI(data) {
+            document.getElementById('ticket-number').textContent = data.number;
+            document.getElementById('ticket-date').textContent = data.date;
+            document.getElementById('ticket-time').textContent = data.time;
+
+            const btnRedeem = document.getElementById('btn-redeem');
+            const btnText = document.getElementById('btn-redeem-text');
+            const stamp = document.getElementById('redeemed-stamp');
+
+            if (data.isRedeemed) {
+                // 已兌換
+                btnRedeem.classList.add('bg-gray-200', 'text-gray-500', 'pointer-events-none');
+                btnRedeem.classList.remove('bg-blue-500', 'text-white', 'hover:bg-blue-600', 'active:scale-95', 'shadow-lg');
+                btnText.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>已兌換完畢`;
+                document.getElementById('ticket-number').classList.add('text-gray-300');
+                stamp.classList.add('show');
+            } else {
+                // 未兌換
+                btnRedeem.classList.remove('bg-gray-200', 'text-gray-500', 'bg-gray-300', 'pointer-events-none');
+                btnRedeem.classList.add('bg-blue-500', 'text-white', 'hover:bg-blue-600', 'active:scale-95', 'shadow-lg');
+                btnText.textContent = "立即兌換";
+                document.getElementById('ticket-number').classList.remove('text-gray-300');
+                stamp.classList.remove('show');
+            }
+
+            // 啟動防截圖時鐘
+            if (!window.liveClockInterval) {
+                updateLiveClock();
+                window.liveClockInterval = setInterval(updateLiveClock, 1000);
+            }
+        }
+        
+        function updateLiveClock() {
+            const nowTime = new Date();
+            const hh = String(nowTime.getHours()).padStart(2, '0');
+            const mm = String(nowTime.getMinutes()).padStart(2, '0');
+            const ss = String(nowTime.getSeconds()).padStart(2, '0');
+            const clockEl = document.getElementById('live-clock');
+            if(clockEl) clockEl.textContent = `${hh}:${mm}:${ss}`;
+        }
+
+        // 當店家端觸發歸零，客人票券被註銷的畫面
+        function renderResetUI() {
+            const content = document.getElementById('ticket-content');
+            content.innerHTML = `
+                <div class="py-8">
+                    <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                    </div>
+                    <p class="text-red-500 font-bold mb-2 text-lg">號碼已失效</p>
+                    <p class="text-gray-500 text-sm leading-relaxed">今日的號碼牌已被店家重置歸零。<br>若有疑問請洽現場工作人員。</p>
+                </div>`;
+            document.getElementById('btn-redeem').parentElement.classList.add('hidden');
+        }
+
+        window.openModal = function(modalId) {
+            const modal = document.getElementById(modalId);
+            const content = document.getElementById(`${modalId}-content`);
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            content.classList.remove('scale-95');
+        }
+
+        window.closeModal = function(modalId) {
+            const modal = document.getElementById(modalId);
+            const content = document.getElementById(`${modalId}-content`);
+            modal.classList.add('opacity-0', 'pointer-events-none');
+            content.classList.add('scale-95');
+        }
+
+        window.showMsg = function(title, text) {
+            document.getElementById('msg-title').textContent = title;
+            document.getElementById('msg-text').textContent = text;
+            window.openModal('msg-modal');
+        }
+
+        // 啟動應用
+        document.addEventListener('DOMContentLoaded', initSystem);
+    </script>
+</body>
+</html>
