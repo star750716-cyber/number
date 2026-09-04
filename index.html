@@ -1,0 +1,151 @@
+<!-- ... existing code ... -->
+                        <div class="flex items-center w-full justify-between">
+                            <span class="text-xs text-gray-400">取得時間</span>
+                            <span id="ticket-time" class="text-sm font-bold text-gray-700">--:--</span>
+                        </div>
+                    </div>
+
+                    <!-- 防偽動態時鐘 -->
+                    <div class="mt-4 w-full text-center bg-blue-50 py-2 rounded-xl border border-blue-100 flex items-center justify-center space-x-2">
+                        <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                        <span class="text-xs text-blue-500 font-bold">即時防偽驗證</span>
+                        <span id="live-clock" class="text-sm font-mono font-bold text-blue-700 tracking-wider">--:--:--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 分隔線 (帶有切角) -->
+<!-- ... existing code ... -->
+```
+
+### 2. 修改客人端底部按鈕
+請找到客人畫面的底部，將「返回店家主控台」的網址加上 `?role=admin`。
+
+```html:雲端號碼牌系統:ticket-system.html
+<!-- ... existing code ... -->
+                <button id="btn-redeem" disabled class="w-full py-4 rounded-xl font-bold text-lg text-white bg-gray-300 shadow-lg transition-all transform flex justify-center items-center">
+                    <span id="btn-redeem-text">讀取中...</span>
+                </button>
+                <p class="text-xs text-center text-red-400 mt-4 font-medium">⚠️ 提醒：請務必交由工作人員點擊兌換</p>
+                
+                <button onclick="window.location.search='?role=admin'" class="w-full mt-4 py-2 rounded-xl text-sm text-gray-500 bg-gray-100 hover:bg-gray-200 transition-colors">
+                    返回店家主控台
+                </button>
+            </div>
+        </div>
+<!-- ... existing code ... -->
+```
+
+### 3. 修改 JS 啟動邏輯：嚴格的防分享路由
+請找到 `<script type="module">` 裡面的 `initApp()` 函數，替換角色的判斷邏輯。
+
+```html:雲端號碼牌系統:ticket-system.html
+<!-- ... existing code ... -->
+                // 【修正核心】：等待 Auth 完成後，再建立集合參考路徑
+                ticketsColRef = collection(db, 'artifacts', appId, 'public', 'data', `tickets_${todayStr}`);
+
+                // 判斷當前角色：看網址是否有帶 ?role 參數
+                const urlParams = new URLSearchParams(window.location.search);
+                const role = urlParams.get('role');
+
+                if (role === 'admin') {
+                    // 店家專用網址結尾必須是 ?role=admin
+                    initStoreMode();
+                } else if (role === 'customer') {
+                    // 【防分享機制 1】：立刻清除網址上的 ?role=customer 參數
+                    // 這樣客人複製網址傳給朋友時，只會傳送乾淨的網址
+                    window.history.replaceState(null, null, window.location.pathname);
+                    initCustomerMode(true); // true 代表允許抽取新號碼
+                } else {
+                    // 朋友點開被分享的乾淨網址，或是直接輸入網址，進入這裡 (不允許抽新號碼)
+                    initCustomerMode(false);
+                }
+            } catch (error) {
+                console.error("Auth Error:", error);
+<!-- ... existing code ... -->
+```
+
+### 4. 修改 JS 客人端：阻擋外流網址與隱藏主控台入口
+請替換 `initCustomerMode` 函數，加入擋下的警告畫面與一個灰色的隱藏店家按鈕（方便您預覽測試）。
+
+```html:雲端號碼牌系統:ticket-system.html
+<!-- ... existing code ... -->
+        // ==========================================
+        // ==========================================
+        async function initCustomerMode(canDrawNew) {
+            customerView.classList.remove('view-hidden');
+            loadingView.classList.add('view-hidden');
+
+            const myDocRef = doc(ticketsColRef, currentUserId);
+            let isFirstLoad = true;
+
+            // 即時監聽客人的專屬票券狀態
+            onSnapshot(myDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    isFirstLoad = false;
+                    // 已經抽過號碼，顯示實體票券
+                    renderTicketUI(docSnap.data());
+                } else {
+                    if (isFirstLoad) {
+                        isFirstLoad = false;
+                        if (canDrawNew) {
+                            // 掃描正確的 QR Code，自動為他抽取一張
+                            drawNewTicket(myDocRef);
+                        } else {
+                            // 【防分享機制 2】無參數且無票券紀錄 (代表是點擊朋友分享的連結)
+                            document.getElementById('ticket-loading').innerHTML = `
+                                <div class="text-center">
+                                    <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                                    </div>
+                                    <p class="text-red-500 font-bold mb-2 text-lg">無效的取號連結</p>
+                                    <p class="text-gray-500 text-sm mb-4 leading-relaxed">此網址無法轉傳共用。<br>請親自至現場櫃台掃描 QR Code 取號。</p>
+                                    <button onclick="window.location.search='?role=admin'" class="mt-4 px-4 py-2 text-xs text-gray-400 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors">店家主控台入口</button>
+                                </div>`;
+                            document.getElementById('ticket-loading').classList.remove('hidden');
+                        }
+                    } else {
+                        // 號碼被刪除了(店家端執行了歸零)
+                        renderResetUI();
+                    }
+                }
+            }, (error) => {
+<!-- ... existing code ... -->
+```
+
+### 5. 修改 JS UI 更新：啟動防偽時鐘
+請找到 `renderTicketUI` 函數的結尾，將時鐘的跳動腳本補上。
+
+```html:雲端號碼牌系統:ticket-system.html
+<!-- ... existing code ... -->
+                // 未兌換狀態
+                btnRedeem.disabled = false;
+                btnRedeem.className = "w-full py-4 rounded-xl font-bold text-lg text-white bg-blue-500 shadow-blue-500/30 shadow-lg hover:bg-blue-600 active:scale-95 flex justify-center items-center transition-all cursor-pointer";
+                btnRedeemText.textContent = "立即兌換";
+                numText.classList.remove('text-gray-300');
+                stamp.classList.remove('show');
+            }
+
+            // 【防截圖機制】啟動防偽時鐘
+            if (!window.liveClockInterval) {
+                updateLiveClock(); // 立即更新一次
+                window.liveClockInterval = setInterval(updateLiveClock, 1000);
+            }
+        }
+        
+        function updateLiveClock() {
+            const now = new Date();
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mm = String(now.getMinutes()).padStart(2, '0');
+            const ss = String(now.getSeconds()).padStart(2, '0');
+            const clockEl = document.getElementById('live-clock');
+            if(clockEl) clockEl.textContent = `${hh}:${mm}:${ss}`;
+        }
+
+        // 當店家端觸發歸零時，客人端的畫面更新
+<!-- ... existing code ... -->
+```
+
+### 💡 測試與操作建議
+完成修改後，由於現在預設的乾淨網址（沒有帶參數的狀態）會直接進入**「無效的連結」**保護畫面（用來擋掉分享連結的朋友）。
+您只要點擊畫面上那顆灰色的**「店家主控台入口」**按鈕，就會順利切換到黑色背景的發號機。接著點擊「點我直接模擬客人手機畫面」，就能看到動態跳動的防偽時鐘囉！
